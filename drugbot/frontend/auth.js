@@ -24,7 +24,13 @@ const API_BASE = window.location.origin;
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => {
-        if (r.ok) window.location.href = "/frontend/index.html";
+        if (r.ok) {
+          window.location.replace("/frontend/index.html");
+        } else {
+          // Token is expired or invalid — clear to prevent redirect loop
+          localStorage.removeItem("drugbot_token");
+          localStorage.removeItem("drugbot_user_email");
+        }
       })
       .catch(() => {});
   }

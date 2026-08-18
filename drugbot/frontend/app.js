@@ -20,9 +20,17 @@ function getAuthHeaders(extraHeaders = {}) {
   return headers;
 }
 
+function handleUnauthorized() {
+  localStorage.removeItem("drugbot_token");
+  localStorage.removeItem("drugbot_user_email");
+  if (!window.location.pathname.endsWith("login.html")) {
+    window.location.replace("/frontend/login.html");
+  }
+}
+
 // ── Auth Guard: Redirect to login if token is absent ──
 if (!getAuthToken()) {
-  window.location.href = "/frontend/login.html";
+  handleUnauthorized();
 }
 
 // ── Verify session token validity against server ──
@@ -34,9 +42,7 @@ if (!getAuthToken()) {
       headers: getAuthHeaders(),
     });
     if (!res.ok) {
-      localStorage.removeItem("drugbot_token");
-      localStorage.removeItem("drugbot_user_email");
-      window.location.href = "/frontend/login.html";
+      handleUnauthorized();
     }
   } catch {
     // Graceful offline/network tolerance
@@ -176,7 +182,7 @@ async function fetchChatSessions() {
 
     if (!res.ok) {
       if (res.status === 401) {
-        window.location.href = "/frontend/login.html";
+        handleUnauthorized();
       }
       return;
     }
@@ -221,8 +227,7 @@ async function loadSessionHistory(sessionId) {
 
     if (!res.ok) {
       if (res.status === 401) {
-        localStorage.removeItem("drugbot_token");
-        window.location.href = "/frontend/login.html";
+        handleUnauthorized();
         return;
       }
       // If 404 or 403, initialize as empty conversation draft without error toast
@@ -603,8 +608,7 @@ $form.addEventListener("submit", async (e) => {
 
     if (!res.ok) {
       if (res.status === 401) {
-        localStorage.removeItem("drugbot_token");
-        window.location.href = "/frontend/login.html";
+        handleUnauthorized();
         return;
       }
       throw new Error(`Server returned status ${res.status}`);
@@ -865,15 +869,19 @@ async function fetchIndexedDrugs() {
     const res = await fetch(`${API_BASE}/api/documents`, {
       headers: getAuthHeaders(),
     });
-    if (res.ok) {
-      const data = await res.json();
-      if (data) {
-        state.userDocuments = data.user_documents || [];
-        if (Array.isArray(data.documents)) {
-          state.ingestedDrugs = data.documents.map(d => d.drug_name.toUpperCase());
-        }
-        renderIngestedDrugs();
+    if (!res.ok) {
+      if (res.status === 401) {
+        handleUnauthorized();
       }
+      return;
+    }
+    const data = await res.json();
+    if (data) {
+      state.userDocuments = data.user_documents || [];
+      if (Array.isArray(data.documents)) {
+        state.ingestedDrugs = data.documents.map(d => d.drug_name.toUpperCase());
+      }
+      renderIngestedDrugs();
     }
   } catch (err) {
     console.warn("Could not fetch indexed documents from backend:", err);
@@ -1273,19 +1281,15 @@ document.getElementById("btn-logout").addEventListener("click", () => {
     recognition.stop();
   }
 
-  // 1. Remove auth credentials from localStorage
-  localStorage.removeItem("drugbot_token");
-  localStorage.removeItem("drugbot_user_email");
-
-  // 2. Clear all active in-memory chat and document state
+  // Clear all active in-memory chat and document state
   state.activeSessionId = null;
   state.messages = {};
   state.sessions = [];
   state.userDocuments = [];
   state.ingestedDrugs = [];
 
-  // 3. Redirect to login page
-  window.location.href = "/frontend/login.html";
+  // Remove credentials and redirect cleanly
+  handleUnauthorized();
 });
 
 init();
