@@ -12,16 +12,25 @@ logger = logging.getLogger(__name__)
 
 # ── Shared context builder ─────────────────────────────────────────────────
 
+from app.rag.citations import clean_document_name
+
 def _build_context_block(chunks: list[dict]) -> str:
     lines = []
     for i, c in enumerate(chunks):
-        meta = c["metadata"]
+        meta = c.get("metadata", {})
+        drug_raw = meta.get("drug_name") or "Prescribing Information"
+        doc_name = clean_document_name(drug_raw)
         section = meta.get("section") or "N/A"
         page = meta.get("page_number") or "N/A"
         lines.append(
-            f"[chunk_{i}] (drug: {meta['drug_name']}, §{section}, p.{page})\n{c['text']}"
+            f"[chunk_{i}]\n"
+            f"SOURCE DOCUMENT: {doc_name}\n"
+            f"SECTION: {section}\n"
+            f"PAGE: {page}\n"
+            f"CONTENT:\n{c.get('text', '')}"
         )
     return "\n\n".join(lines)
+
 
 
 # ── Compact prompts ───────────────────────────────────────────────────────
@@ -40,6 +49,7 @@ Rules:
     - §2 DOSAGE AND ADMINISTRATION ≠ §6 ADVERSE REACTIONS
     Do NOT substitute content from a related section. For example, if the user asks about "contraindications" and §4 states "None", answer clearly and concisely that according to Section 4 of the prescribing information, there are no listed contraindications. Do NOT list warnings from §5 as if they were contraindications.
 (7) If a section's content is brief (e.g. "None"), report that faithfully in a clean sentence. A short answer grounded in the correct section is better than a long answer from the wrong section.
+(8) MULTILINGUAL RULE: If the user's question is written in a language other than English (e.g., Tamil, Hindi, Chinese, Japanese, Arabic, Spanish, French, etc.), respond in the SAME language as the user's question. However, strictly PRESERVE all medical entity names, drug brand names (e.g., SKYRIZI, RINVOQ, HUMIRA), active ingredients (e.g., risankizumab-rzaa), dosages, units (e.g., mg, mL), and section titles in their standard medical form.
 
 <document_context>
 {context_block}
@@ -48,6 +58,7 @@ Rules:
 {history_block}User question: {question}
 
 Answer (with [chunk_N] citations):"""
+
 
 
 _PATIENT_SPECIFIC_PROMPT = """\

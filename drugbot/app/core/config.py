@@ -31,7 +31,14 @@ class Settings(BaseSettings):
                 deduped.append(m)
         return deduped
 
-    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    embedding_model: str = Field(
+        default="BAAI/bge-small-en-v1.5",
+        validation_alias="EMBEDDING_MODEL",
+    )
+    tesseract_lang: str = Field(
+        default="eng",
+        validation_alias="TESSERACT_LANG",
+    )
 
     sqlite_db_path: str = "./data/app.db"
     chroma_db_path: str = "./data/chroma_db"

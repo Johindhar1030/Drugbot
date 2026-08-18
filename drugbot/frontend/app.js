@@ -47,6 +47,7 @@ if (!getAuthToken()) {
 const state = {
   sessions: [],            // Array of { id, title, created_at, updated_at } fetched from server
   activeSessionId: null,
+  chatInitializationId: null, // Token tracking active chat initialization to prevent stale async callbacks
   messages: {},            // Cache of { [sessionId]: [{ id, role, text, citations, confidence, scores, safety_notice }] }
   userDocuments: [],       // Array of user-owned PDFs { id, document_id, drug_name, filename, file_size, chunk_count }
   ingestedDrugs: [],       // Aggregated unique drug names
@@ -162,6 +163,10 @@ function generateId() {
 /**
  * Fetch all chat sessions belonging strictly to the authenticated user from the backend.
  */
+/**
+ * Fetch all chat sessions belonging strictly to the authenticated user from the backend.
+ * Updates state.sessions and sidebar history without modifying activeSessionId.
+ */
 async function fetchChatSessions() {
   try {
     const res = await fetch(`${API_BASE}/api/chat/sessions`, {
@@ -178,6 +183,7 @@ async function fetchChatSessions() {
     const data = await res.json();
     if (data && Array.isArray(data.sessions)) {
       state.sessions = data.sessions;
+      // Re-render sidebar without changing state.activeSessionId
       renderChatHistory();
     }
   } catch (err) {
@@ -187,23 +193,29 @@ async function fetchChatSessions() {
 
 /**
  * Load full message history for a specific conversation session from the server.
- * Server validates session ownership; access to other users' sessions is rejected.
+ * Includes explicit race-condition guard so stale async responses cannot overwrite active session.
  */
 async function loadSessionHistory(sessionId) {
   if (!sessionId) return;
-  state.activeSessionId = sessionId;
+  const targetSessionId = sessionId;
+  state.activeSessionId = targetSessionId;
   renderChatHistory();
 
   // If already cached in memory (including empty new drafts), render immediately
-  if (state.messages[sessionId] !== undefined) {
-    renderThread();
+  if (state.messages[targetSessionId] !== undefined) {
+    if (state.activeSessionId === targetSessionId) {
+      renderThread();
+    }
     return;
   }
 
   try {
-    const res = await fetch(`${API_BASE}/api/chat/sessions/${sessionId}`, {
+    const res = await fetch(`${API_BASE}/api/chat/sessions/${targetSessionId}`, {
       headers: getAuthHeaders(),
     });
+
+    // Guard: ignore stale response if user switched active session while fetch was in-flight
+    if (state.activeSessionId !== targetSessionId) return;
 
     if (!res.ok) {
       if (res.status === 401) {
@@ -212,14 +224,17 @@ async function loadSessionHistory(sessionId) {
         return;
       }
       // If 404 or 403, initialize as empty conversation draft without error toast
-      state.messages[sessionId] = [];
+      state.messages[targetSessionId] = [];
       renderThread();
       return;
     }
 
     const data = await res.json();
+    // Guard: ignore stale response if active session changed while JSON parsing
+    if (state.activeSessionId !== targetSessionId) return;
+
     if (data && Array.isArray(data.messages)) {
-      state.messages[sessionId] = data.messages.map(m => ({
+      state.messages[targetSessionId] = data.messages.map(m => ({
         id: m.id,
         role: m.role,
         text: m.text,
@@ -228,15 +243,19 @@ async function loadSessionHistory(sessionId) {
         scores: m.scores || null,
         safety_notice: m.safety_notice || null,
       }));
-      renderThread();
     } else {
-      state.messages[sessionId] = [];
+      state.messages[targetSessionId] = [];
+    }
+
+    if (state.activeSessionId === targetSessionId) {
       renderThread();
     }
   } catch (err) {
     console.warn("Could not load message history:", err);
-    state.messages[sessionId] = state.messages[sessionId] || [];
-    renderThread();
+    state.messages[targetSessionId] = state.messages[targetSessionId] || [];
+    if (state.activeSessionId === targetSessionId) {
+      renderThread();
+    }
   }
 }
 
@@ -278,14 +297,10 @@ async function deleteSession(id) {
   delete state.messages[id];
 
   if (state.activeSessionId === id) {
-    if (state.sessions.length > 0) {
-      loadSessionHistory(state.sessions[0].id);
-    } else {
-      state.activeSessionId = null;
-      showWelcome();
-    }
+    startNewChat();
+  } else {
+    renderChatHistory();
   }
-  renderChatHistory();
 }
 
 function setActiveSession(id) {
@@ -368,27 +383,27 @@ function appendMessageToDOM(msg) {
 
   const isUser = msg.role === "user";
 
-  // ── Citations ──
+  // ── Citations (clean deduplicated Sources block) ──
   let citationsHTML = "";
-  if (msg.citations && msg.citations.length > 0) {
+  if (msg.citations && msg.citations.length > 0 && !isUser) {
     const uniqueCitations = [];
     const seen = new Set();
     for (const c of msg.citations) {
       const key = `${c.document}|${c.section}|${c.page}`;
       if (!seen.has(key)) { seen.add(key); uniqueCitations.push(c); }
     }
-    citationsHTML = `<div class="message-citations">
-      ${uniqueCitations.map(c => {
-        const sectionLabel = (c.section && c.section !== "Not available")
-          ? `§${escapeHtml(c.section)}` : "Section: Not available";
-        const pageLabel = (c.page && c.page !== "Not available")
-          ? `p. ${c.page}` : "Page: Not available";
-        const docLabel = escapeHtml(c.document || "Prescribing Information");
-        return `<span class="citation-tag" title="${docLabel} — ${sectionLabel}, ${pageLabel}">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>
-          ${sectionLabel} ${pageLabel}
-        </span>`;
-      }).join("")}
+    const sourceLines = uniqueCitations.map(c => {
+      const doc = escapeHtml(c.document || "Prescribing Information");
+      const section = (c.section && c.section !== "Not available") ? escapeHtml(c.section) : null;
+      const page = (c.page && c.page !== "Not available") ? c.page : null;
+      let line = doc;
+      if (section) line += ` — ${section}`;
+      if (page) line += `, p. ${page}`;
+      return `<li>${line}</li>`;
+    }).join("");
+    citationsHTML = `<div class="message-sources">
+      <strong>Sources</strong>
+      <ul>${sourceLines}</ul>
     </div>`;
   }
 
@@ -632,63 +647,37 @@ $form.addEventListener("submit", async (e) => {
 });
 
 // ── New Chat ──
-$btnNewChat.addEventListener("click", async () => {
+/**
+ * Single reusable function to initialize/reset to a NEW CHAT session.
+ * Clears active messages view, deselects previous sidebar history, and shows welcome screen.
+ */
+function startNewChat() {
   stopSpeech();
   if (isListening && recognition) {
     recognition.stop();
   }
 
-  // If current active session is already empty and on welcome screen, just focus input
-  if (state.activeSessionId && state.messages[state.activeSessionId] && state.messages[state.activeSessionId].length === 0) {
-    showWelcome();
-    renderChatHistory();
-    $input.value = "";
-    $input.style.height = "auto";
-    $sendBtn.disabled = true;
-    $input.focus();
-    return;
-  }
-
-  try {
-    const res = await fetch(`${API_BASE}/api/chat/sessions`, {
-      method: "POST",
-      headers: getAuthHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ title: "New chat" }),
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      const newSession = {
-        id: data.id,
-        title: data.title || "New chat",
-        created_at: data.created_at || new Date().toISOString(),
-      };
-      state.sessions.unshift(newSession);
-      state.activeSessionId = data.id;
-      state.messages[data.id] = [];
-      renderChatHistory();
-      showWelcome();
-      $input.value = "";
-      $input.style.height = "auto";
-      $sendBtn.disabled = true;
-      $input.focus();
-      return;
-    }
-  } catch (err) {
-    console.warn("Failed to create session on server, creating local session:", err);
-  }
-
-  // Fallback to local draft
-  const newId = createNewSession();
+  // Generate a brand new conversation ID draft and update initialization token
+  const newId = generateId();
+  state.chatInitializationId = newId;
   state.activeSessionId = newId;
   state.messages[newId] = [];
   renderChatHistory();
   showWelcome();
-  $input.value = "";
-  $input.style.height = "auto";
-  $sendBtn.disabled = true;
-  $input.focus();
+  if ($input) {
+    $input.value = "";
+    $input.style.height = "auto";
+    if ($sendBtn) $sendBtn.disabled = true;
+    $input.focus();
+  }
+  return newId;
+}
+
+$btnNewChat.addEventListener("click", () => {
+  startNewChat();
 });
+
+
 
 // ── Suggestion Chips ──
 document.querySelectorAll(".suggestion-chip").forEach(chip => {
@@ -1051,8 +1040,10 @@ function formatBotText(text) {
   // Inline code: `text`
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
 
-  // Inline source citations: [§Section, p.Page] or [Section X, p.Y]
-  html = html.replace(/\[(§[^\]]+)\]/g, '<span class="inline-citation-tag">[$1]</span>');
+  // Strip any residual inline source citations [§...] or [Med Guide, p.43] etc.
+  // Citations are now rendered as a separate Sources block below the answer.
+  html = html.replace(/\s*\[§[^\]]*\]/g, "");
+  html = html.replace(/\s*\[[^\]]*(?:p\.\s*\d+|Med Guide|Highlights|Boxed Warning|Patient Info|IFU)[^\]]*\]/g, "");
 
   // Bullet lists: lines starting with "- " or "• "
   html = html.replace(/^[•\-]\s+(.+)$/gm, "<li>$1</li>");
@@ -1247,27 +1238,37 @@ function speakResponse(rawText, btnEl) {
 //  INITIALIZATION
 // ════════════════════════════════════════════════════════════════════════════
 async function init() {
-  // Sync chat sessions and indexed documents from backend
-  await fetchChatSessions();
-  await fetchIndexedDrugs();
+  // 1. Immediately start a new empty chat synchronously (ensures state.activeSessionId is set right away)
+  startNewChat();
 
-  // Show active session if available, else welcome
-  if (state.sessions.length > 0) {
-    loadSessionHistory(state.sessions[0].id);
-  } else {
-    showWelcome();
-  }
-
-  $input.focus();
+  // 2. Fetch history and documents in background without blocking or overwriting active chat session
+  fetchChatSessions();
+  fetchIndexedDrugs();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
 //  LOGOUT
 // ════════════════════════════════════════════════════════════════════════════
 document.getElementById("btn-logout").addEventListener("click", () => {
+  stopSpeech();
+  if (isListening && recognition) {
+    recognition.stop();
+  }
+
+  // 1. Remove auth credentials from localStorage
   localStorage.removeItem("drugbot_token");
   localStorage.removeItem("drugbot_user_email");
+
+  // 2. Clear all active in-memory chat and document state
+  state.activeSessionId = null;
+  state.messages = {};
+  state.sessions = [];
+  state.userDocuments = [];
+  state.ingestedDrugs = [];
+
+  // 3. Redirect to login page
   window.location.href = "/frontend/login.html";
 });
 
 init();
+

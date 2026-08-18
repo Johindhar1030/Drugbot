@@ -312,11 +312,43 @@ def _extract_page_tables(pdfplumber_page) -> tuple[list[list[list[str]]], list[f
 # OPTICAL CHARACTER RECOGNITION (OCR) FALLBACK
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _ocr_page_fitz(fitz_page: fitz.Page, page_number: int) -> str:
-    """Rasterize a scanned or image-only page and perform OCR with preprocessing."""
+def _ocr_page_fitz(fitz_page: fitz.Page, page_number: int, lang: str | None = None) -> str:
+    """Rasterize a scanned or image-only page and perform OCR with preprocessing.
+
+    Supports configurable multi-language Tesseract OCR (e.g. eng, eng+tam, eng+hin).
+    Gracefully handles missing language packs by falling back to available language data.
+    """
     if not OCR_AVAILABLE:
         logger.warning("Page %d: native text layer empty and OCR unavailable — skipping", page_number)
         return ""
+
+    from app.core.config import settings
+    target_lang = lang or getattr(settings, "tesseract_lang", "eng") or "eng"
+
+    available_langs = []
+    try:
+        available_langs = pytesseract.get_languages()
+    except Exception as e:
+        logger.debug("Failed to query Tesseract get_languages: %s", e)
+
+    valid_langs = []
+    missing_langs = []
+    if available_langs:
+        for requested in target_lang.split("+"):
+            req_clean = requested.strip()
+            if req_clean in available_langs:
+                valid_langs.append(req_clean)
+            else:
+                missing_langs.append(req_clean)
+
+        if missing_langs:
+            logger.warning(
+                "OCR language(s) %s not installed. Install the corresponding Tesseract "
+                "language data to improve OCR accuracy. Using available OCR language(s): %s",
+                missing_langs, valid_langs or ["eng"]
+            )
+
+    active_lang_str = "+".join(valid_langs) if valid_langs else "eng"
 
     try:
         # Render at 300 DPI for high OCR accuracy on small prescription fonts
@@ -328,12 +360,16 @@ def _ocr_page_fitz(fitz_page: fitz.Page, page_number: int) -> str:
         enhancer = ImageEnhance.Contrast(img)
         img = enhancer.enhance(1.8)
 
-        ocr_text = pytesseract.image_to_string(img, config="--psm 1")  # Automatic page segmentation with OSD
-        if not ocr_text.strip():
-            ocr_text = pytesseract.image_to_string(img, config="--psm 3")  # Fully automatic page segmentation
+        try:
+            ocr_text = pytesseract.image_to_string(img, lang=active_lang_str, config="--psm 1")
+            if not ocr_text.strip():
+                ocr_text = pytesseract.image_to_string(img, lang=active_lang_str, config="--psm 3")
+        except Exception:
+            # Fallback if tesseract throws on specified lang
+            ocr_text = pytesseract.image_to_string(img, config="--psm 3")
 
         cleaned = clean_and_normalize_text(ocr_text)
-        logger.info("Page %d: OCR extracted %d characters", page_number, len(cleaned))
+        logger.info("Page %d: OCR extracted %d characters using lang='%s'", page_number, len(cleaned), active_lang_str)
         return cleaned
     except Exception as exc:
         logger.warning("Page %d: OCR failed (%s) — skipping", page_number, exc)
@@ -344,11 +380,12 @@ def _ocr_page_fitz(fitz_page: fitz.Page, page_number: int) -> str:
 # MAIN DOCUMENT EXTRACTION ENTRYPOINT
 # ─────────────────────────────────────────────────────────────────────────────
 
-def extract_pdf(pdf_path: str) -> list[PageContent]:
+def extract_pdf(pdf_path: str, ocr_lang: str | None = None) -> list[PageContent]:
     """Extract structured, multi-column, table-isolated content from a drug label PDF.
 
     Args:
         pdf_path: Path to the local PDF file.
+        ocr_lang: Optional Tesseract OCR language specification (e.g. 'eng', 'eng+tam').
 
     Returns:
         List of PageContent objects for each page in the document.
@@ -414,8 +451,9 @@ def extract_pdf(pdf_path: str) -> list[PageContent]:
                 is_scanned = False
                 if not page_text.strip() and not tables:
                     logger.info("Page %d: no text layer detected, invoking OCR fallback", page_number)
-                    page_text = _ocr_page_fitz(fitz_page, page_number)
+                    page_text = _ocr_page_fitz(fitz_page, page_number, lang=ocr_lang)
                     is_scanned = True
+
 
                 # Step D: Extract embedded non-icon figures / diagrams for multimodal captioning
                 images: list[Image.Image] = []

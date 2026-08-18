@@ -23,6 +23,7 @@ def _chunk_to_record(chunk: Chunk, document_id: str, user_id: int | None = None)
         "page_number": chunk.page_number,
         "is_table": chunk.is_table,
         "is_boxed_warning": chunk.is_boxed_warning,
+        "language": getattr(chunk, "language", "en"),
     }
     if user_id is not None:
         meta["user_id"] = user_id
@@ -40,12 +41,14 @@ def ingest_pdf(
     caption_images: bool = True,
     user_id: int | None = None,
     document_id: str | None = None,
+    ocr_lang: str | None = None,
 ) -> dict:
     if not document_id:
         document_id = str(uuid.uuid4())
     logger.info(f"Starting ingestion: {pdf_path} (drug={drug_name}, doc_id={document_id}, user_id={user_id})")
 
-    pages = extract_pdf(pdf_path)
+    pages = extract_pdf(pdf_path, ocr_lang=ocr_lang)
+
 
     # Validate medical/pharmaceutical domain before processing
     try:

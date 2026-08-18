@@ -51,7 +51,7 @@ def _retrieval_score(chunks: list[dict]) -> float:
 
 
 def _citation_score(answer: str, chunks: list[dict]) -> float:
-    cited = set(int(m) for m in re.findall(r"\[chunk_(\d+)\]", answer))
+    cited = set(int(m) for m in re.findall(r"(?:\[|\【|\(\[?|\b)chunk_(\d+)(?:\]|\】|\)\]?|\b)", answer, re.IGNORECASE))
     if not cited:
         return 1.0  # no citations expected (e.g. safety response)
     valid = sum(1 for i in cited if 0 <= i < len(chunks))
@@ -96,13 +96,14 @@ def _local_grounding_score(answer: str, chunks: list[dict]) -> tuple[float, list
     for sent in sentences:
         sent_lower = sent.lower()
 
-        # Check 1: Valid explicit citation marker in sentence (e.g. [chunk_0])
-        cited_chunks = re.findall(r"\[chunk_(\d+)\]", sent)
+        # Check 1: Valid explicit citation marker in sentence (e.g. [chunk_0], 【chunk_0】)
+        cited_chunks = re.findall(r"(?:\[|\【|\(\[?|\b)chunk_(\d+)(?:\]|\】|\)\]?|\b)", sent, re.IGNORECASE)
         if cited_chunks:
             valid_cite = any(0 <= int(idx) < len(chunks) for idx in cited_chunks)
             if valid_cite:
                 supported += 1
                 continue
+
 
         # Check 2: Negative assertions for sections stating "none" or "no contraindications"
         if any(neg in sent_lower for neg in (

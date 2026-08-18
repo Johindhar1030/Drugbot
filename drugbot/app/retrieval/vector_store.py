@@ -15,36 +15,66 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+import re
+
+class MultilingualEmbeddingFunction(embedding_functions.SentenceTransformerEmbeddingFunction):
+    """Embedding wrapper supporting E5 family passage/query formatting."""
+    def __init__(self, model_name: str, **kwargs):
+        super().__init__(model_name=model_name, **kwargs)
+        self.is_e5 = "e5" in model_name.lower()
+
+    def __call__(self, input: list[str]) -> list[list[float]]:
+        if self.is_e5:
+            formatted = []
+            for text in input:
+                if text.startswith("query: ") or text.startswith("passage: "):
+                    formatted.append(text)
+                else:
+                    formatted.append(f"passage: {text}")
+            return super().__call__(formatted)
+        return super().__call__(input)
+
+
+def get_collection_name() -> str:
+    """Generate safe, versioned Chroma collection name based on current embedding model.
+
+    Prevents vector dimension/space mismatch when embedding model changes.
+    """
+    model_clean = re.sub(r"[^a-zA-Z0-9_]", "_", settings.embedding_model.lower())
+    model_clean = model_clean[:40].strip("_")
+    return f"drug_label_chunks_{model_clean}"
+
+
 _client = None
 _collection = None
+_active_model_name = None
 
 
 def get_collection():
-    """Return a Chroma collection; prefer CloudClient when configured."""
-    global _client, _collection
-    if _collection is not None:
+    """Return a versioned Chroma collection matching settings.embedding_model; prefer CloudClient when configured."""
+    global _client, _collection, _active_model_name
+    current_model = settings.embedding_model
+    if _collection is not None and _active_model_name == current_model:
         return _collection
 
-    embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=settings.embedding_model
-    )
+    _active_model_name = current_model
+    collection_name = get_collection_name()
+    embed_fn = MultilingualEmbeddingFunction(model_name=current_model)
 
     # Prefer Chroma Cloud when API key is present
     if settings.chroma_api_key:
         try:
-            # CloudClient may accept host in newer SDKs; we keep the call
-            # conservative and pass the required auth/tenant/database fields.
             _client = chromadb.CloudClient(
                 api_key=settings.chroma_api_key,
                 tenant=settings.chroma_tenant,
                 database=settings.chroma_database,
             )
             _collection = _client.get_or_create_collection(
-                name="drug_label_chunks",
+                name=collection_name,
                 embedding_function=embed_fn,
                 metadata={"hnsw:space": "cosine"},
             )
-            logger.info("Connected to Chroma Cloud collection 'drug_label_chunks'")
+            logger.info("Connected to Chroma Cloud collection '%s'", collection_name)
             return _collection
         except Exception as exc:
             logger.warning("Chroma Cloud connection failed, falling back to local: %s", exc)
@@ -52,12 +82,13 @@ def get_collection():
     # Fallback to local persistent client
     _client = chromadb.PersistentClient(path=settings.chroma_db_path)
     _collection = _client.get_or_create_collection(
-        name="drug_label_chunks",
+        name=collection_name,
         embedding_function=embed_fn,
         metadata={"hnsw:space": "cosine"},
     )
-    logger.info("Using local Chroma collection at %s", settings.chroma_db_path)
+    logger.info("Using local Chroma collection '%s' at %s", collection_name, settings.chroma_db_path)
     return _collection
+
 
 
 _known_drugs = None
@@ -232,8 +263,13 @@ def vector_search(query: str, top_k: int, drug_name: str | list[str] | tuple | N
     else:
         where = None
 
+    query_str = query
+    if "e5" in settings.embedding_model.lower() and not query.startswith("query: "):
+        query_str = f"query: {query}"
+
     try:
-        results = collection.query(query_texts=[query], n_results=top_k, where=where)
+        results = collection.query(query_texts=[query_str], n_results=top_k, where=where)
+
     except Exception as exc:
         logger.warning("Chroma vector query error: %s", exc)
         return []

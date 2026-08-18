@@ -7,6 +7,8 @@
 from dataclasses import dataclass, field
 from app.ingestion.section_detector import detect_sections, current_section_for_offset
 
+from app.utils.language_detector import detect_multilingual
+
 MAX_CHUNK_CHARS = 3200  # ~700-800 tokens
 
 
@@ -18,6 +20,7 @@ class Chunk:
     drug_name: str
     is_table: bool = False
     is_boxed_warning: bool = False
+    language: str = "en"
 
 
 def _split_long_section(text: str, max_chars: int) -> list[str]:
@@ -77,8 +80,9 @@ def chunk_page(
             sec = _section_for_table(table_positions[i], heading_positions, fallback=active_section)
         else:
             sec = markers[-1].heading if markers else active_section
+        lang = detect_multilingual(rendered)
         chunks.append(Chunk(text=rendered, section=sec, page_number=page_number,
-                             drug_name=drug_name, is_table=True))
+                             drug_name=drug_name, is_table=True, language=lang))
 
     if not page_text.strip():
         return chunks, active_section
@@ -86,7 +90,8 @@ def chunk_page(
     if not markers:
         # Whole page belongs to the section active from previous page
         for piece in _split_long_section(page_text, MAX_CHUNK_CHARS):
-            chunks.append(Chunk(text=piece, section=active_section, page_number=page_number, drug_name=drug_name))
+            lang = detect_multilingual(piece)
+            chunks.append(Chunk(text=piece, section=active_section, page_number=page_number, drug_name=drug_name, language=lang))
         return chunks, active_section
 
     # 2. split page text at each section boundary
@@ -96,7 +101,8 @@ def chunk_page(
     lead = page_text[:bounds[0]].strip()
     if lead:
         for piece in _split_long_section(lead, MAX_CHUNK_CHARS):
-            chunks.insert(0, Chunk(text=piece, section=active_section, page_number=page_number, drug_name=drug_name))
+            lang = detect_multilingual(piece)
+            chunks.insert(0, Chunk(text=piece, section=active_section, page_number=page_number, drug_name=drug_name, language=lang))
 
     for i, marker in enumerate(markers):
         active_section = marker.heading
@@ -104,12 +110,15 @@ def chunk_page(
         if not segment:
             continue
         for piece in _split_long_section(segment, MAX_CHUNK_CHARS):
+            lang = detect_multilingual(piece)
             chunks.append(Chunk(
                 text=piece,
                 section=marker.heading,
                 page_number=page_number,
                 drug_name=drug_name,
                 is_boxed_warning=marker.is_boxed_warning,
+                language=lang,
             ))
 
     return chunks, active_section
+

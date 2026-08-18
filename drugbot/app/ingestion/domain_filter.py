@@ -102,18 +102,26 @@ def validate_pdf_domain(pages: list["PageContent"], drug_name: str = "") -> dict
         if re.search(rf"\b{norm_name}\b", full_sample, re.IGNORECASE):
             drug_name_found = True
 
+    # 4. Check multilingual script presence
+    from app.utils.language_detector import detect_language
+    detected_lang = detect_language(full_sample)
+    has_multilingual_script = detected_lang not in ("en", "unknown")
+
     section_count = len(section_matches)
     term_count = len(term_matches)
 
     # Evaluation rule:
     # - Standard PI/label typically matches 3+ section headings and 4+ term categories.
     # - Clinical monographs/papers match at least 1 section heading and 4+ term categories, or 5+ terms.
+    # - Multilingual / non-English documents match drug names, medical units, or non-Latin script text.
     is_valid = (
         section_count >= 2
         or (section_count >= 1 and term_count >= 3)
         or (term_count >= 5)
-        or (drug_name_found and term_count >= 3)
+        or (drug_name_found and (term_count >= 1 or has_multilingual_script))
+        or (has_multilingual_script and (term_count >= 1 or len(full_sample) >= 100))
     )
+
 
     logger.info(
         "PDF Domain validation for '%s': pages=%d sections=%d terms=%d drug_found=%s -> valid=%s",

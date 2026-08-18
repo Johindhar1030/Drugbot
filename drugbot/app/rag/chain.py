@@ -32,7 +32,7 @@ from app.rag.generator import generate_answer
 from app.rag.groundedness import check_groundedness, verify_document_evidence
 from app.rag.safety_classifier import classify_question, EMPATHETIC_OUT_OF_SCOPE_REFUSAL
 from app.core.privacy_logger import log_out_of_scope_query, log_safety_event
-from app.rag.citations import extract_citations, strip_citation_markers, replace_chunk_markers_with_sources
+from app.rag.citations import extract_citations, strip_citation_markers, sanitize_response_text
 from app.rag.context_budget import select_context_chunks
 from app.rag.normalizer import normalize_query, NormalizationResult
 
@@ -430,7 +430,10 @@ def handle_chat_message(
 
     # 12. Citations (uses context_chunks for correct chunk_N mapping)
     citations = extract_citations(draft, context_chunks)
-    display_answer = replace_chunk_markers_with_sources(draft, context_chunks)
+    # Strip raw chunk markers from the answer text — structured citations are sent
+    # separately in the `citations` array, so embedding them inline causes duplication.
+    display_answer = strip_citation_markers(draft)
+    display_answer = sanitize_response_text(display_answer)
 
     # 13. Safety notice — only for patient_specific
     safety_notice = None
@@ -472,11 +475,16 @@ def handle_chat_message(
         len(context_chunks),
     )
 
+    from app.utils.language_detector import detect_language
+    query_lang = detect_language(message)
+
     return {
         "answer": display_answer,
         "citations": citations,
         "active_drug": active_drug,
         "confidence": "grounded",
+        "detected_language": query_lang,
+
         "scores": {
             "retrieval_score": groundedness.retrieval_score,
             "grounding_score": groundedness.grounding_score,
