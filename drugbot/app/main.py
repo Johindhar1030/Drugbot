@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request
+from fastapi import BackgroundTasks, FastAPI, UploadFile, File, Form, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -130,9 +130,82 @@ from app.ingestion.url_fetcher import fetch_pdf_from_url, PDFDownloadError
 #  PDF DOCUMENT ACCESS CONTROL & ISOLATED STORAGE
 # ════════════════════════════════════════════════════════════════════════════
 
-@app.post("/api/documents/upload")
+def process_uploaded_document(
+    permanent_pdf_path: Path,
+    document_id: str,
+    drug_name: str,
+    filename: str,
+    file_size: int,
+    user_id: int,
+    request: Request,
+):
+    try:
+        result = ingest_pdf(
+            str(permanent_pdf_path),
+            drug_name=drug_name,
+            user_id=user_id,
+            document_id=document_id,
+        )
+
+        db = SessionLocal()
+        try:
+            doc_record = UserDocument(
+                user_id=user_id,
+                document_id=document_id,
+                drug_name=drug_name,
+                filename=filename,
+                file_path=str(permanent_pdf_path),
+                file_size=file_size,
+                page_count=result.get("page_count", 0),
+                chunk_count=result.get("chunk_count", 0),
+            )
+            db.add(doc_record)
+            db.commit()
+        finally:
+            db.close()
+
+        log_audit_event(
+            action="PDF_UPLOAD_SUCCESS",
+            resource_type="PDF_DOCUMENT",
+            resource_id=document_id,
+            user_id=user_id,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            status="SUCCESS",
+            details=f"Uploaded {filename} for drug '{drug_name}' ({result.get('chunk_count', 0)} chunks)",
+        )
+    except PDFDomainValidationError as e:
+        logger.warning("PDF domain validation rejected upload: %s", e)
+        permanent_pdf_path.unlink(missing_ok=True)
+        log_audit_event(
+            action="PDF_UPLOAD_DOMAIN_REJECTED",
+            resource_type="PDF_DOCUMENT",
+            resource_id=document_id,
+            user_id=user_id,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            status="DENIED",
+            details=str(e),
+        )
+    except Exception as e:
+        logger.exception("Error ingesting PDF: %s", e)
+        permanent_pdf_path.unlink(missing_ok=True)
+        log_audit_event(
+            action="PDF_UPLOAD_FAILED",
+            resource_type="PDF_DOCUMENT",
+            resource_id=document_id,
+            user_id=user_id,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            status="FAILED",
+            details=str(e),
+        )
+
+
+@app.post("/api/documents/upload", status_code=202)
 async def upload_document(
     request: Request,
+    background_tasks: BackgroundTasks,
     drug_name: str = Form(...),
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
@@ -167,75 +240,25 @@ async def upload_document(
 
     file_size = permanent_pdf_path.stat().st_size
 
-    try:
-        result = ingest_pdf(
-            str(permanent_pdf_path),
-            drug_name=drug_name.strip().upper(),
-            user_id=current_user.id,
-            document_id=document_id,
-        )
-
-        # Store metadata in DB
-        db = SessionLocal()
-        try:
-            doc_record = UserDocument(
-                user_id=current_user.id,
-                document_id=document_id,
-                drug_name=drug_name.strip().upper(),
-                filename=file.filename,
-                file_path=str(permanent_pdf_path),
-                file_size=file_size,
-                page_count=result.get("page_count", 0),
-                chunk_count=result.get("chunk_count", 0),
-            )
-            db.add(doc_record)
-            db.commit()
-        finally:
-            db.close()
-
-        log_audit_event(
-            action="PDF_UPLOAD_SUCCESS",
-            resource_type="PDF_DOCUMENT",
-            resource_id=document_id,
-            user_id=current_user.id,
-            ip_address=request.client.host if request.client else None,
-            user_agent=request.headers.get("user-agent"),
-            status="SUCCESS",
-            details=f"Uploaded {file.filename} for drug '{drug_name}' ({result.get('chunk_count', 0)} chunks)",
-        )
-
-        result["document_id"] = document_id
-        return result
-
-    except PDFDomainValidationError as e:
-        logger.warning("PDF domain validation rejected upload: %s", e)
-        # Clean up rejected file
-        permanent_pdf_path.unlink(missing_ok=True)
-        log_audit_event(
-            action="PDF_UPLOAD_DOMAIN_REJECTED",
-            resource_type="PDF_DOCUMENT",
-            resource_id=document_id,
-            user_id=current_user.id,
-            ip_address=request.client.host if request.client else None,
-            user_agent=request.headers.get("user-agent"),
-            status="DENIED",
-            details=str(e),
-        )
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.exception("Error ingesting PDF: %s", e)
-        permanent_pdf_path.unlink(missing_ok=True)
-        log_audit_event(
-            action="PDF_UPLOAD_FAILED",
-            resource_type="PDF_DOCUMENT",
-            resource_id=document_id,
-            user_id=current_user.id,
-            ip_address=request.client.host if request.client else None,
-            user_agent=request.headers.get("user-agent"),
-            status="FAILED",
-            details=str(e),
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to process and ingest document: {str(e)}")
+    normalized_drug_name = drug_name.strip().upper()
+    background_tasks.add_task(
+        process_uploaded_document,
+        permanent_pdf_path,
+        document_id,
+        normalized_drug_name,
+        file.filename,
+        file_size,
+        current_user.id,
+        request,
+    )
+    return {
+        "document_id": document_id,
+        "user_id": current_user.id,
+        "drug_name": normalized_drug_name,
+        "filename": file.filename,
+        "status": "processing",
+        "message": "Upload accepted. Document ingestion is running in the background.",
+    }
 
 
 @app.post("/api/documents/fetch-url")

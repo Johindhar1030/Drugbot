@@ -836,10 +836,15 @@ $uploadForm.addEventListener("submit", async (e) => {
       body: formData,
     });
 
+    if (res.status === 102 || res.status === 202) {
+      $progressFill.classList.remove("indeterminate");
+      $progressFill.style.width = "60%";
+      $uploadStatus.textContent = "Upload is still being processed. Please wait a moment and try again.";
+      $submitUpload.disabled = false;
+      return;
+    }
+
     if (!res.ok) {
-      if (res.status === 102) {
-        throw new Error("Upload is still being processed. Please wait a moment and try again.");
-      }
       if (res.status === 401) {
         handleUnauthorized();
       }
