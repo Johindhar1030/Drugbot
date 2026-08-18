@@ -32,6 +32,13 @@ setup_logging()
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Drug Information Chatbot")
 
+
+def should_build_bm25_on_startup() -> bool:
+    """Avoid a full BM25 rebuild on low-memory Render instances unless explicitly enabled."""
+    value = os.getenv("ENABLE_BM25_STARTUP_BUILD", "false").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 # CORS — allow the frontend to call the API from any origin during development
 app.add_middleware(
     CORSMiddleware,
@@ -70,8 +77,14 @@ app.include_router(auth_router)
 @app.on_event("startup")
 async def startup_event():
     from app.retrieval.keyword_index import ensure_bm25_index
-    logger.info("Building/restoring BM25 index from Chroma database on startup...")
-    ensure_bm25_index(force_rebuild=True)
+    if should_build_bm25_on_startup():
+        logger.info("Building/restoring BM25 index from Chroma database on startup...")
+        ensure_bm25_index(force_rebuild=True)
+    else:
+        logger.info(
+            "Skipped BM25 startup rebuild to avoid memory pressure on this instance. "
+            "Set ENABLE_BM25_STARTUP_BUILD=true to enable it explicitly."
+        )
 
 
 # Serve the frontend static files

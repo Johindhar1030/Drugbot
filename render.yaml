@@ -10,3 +10,5 @@ services:
         value: 3.11.9
       - key: PYTHONPATH
         value: .
+      - key: ENABLE_BM25_STARTUP_BUILD
+        value: "false"

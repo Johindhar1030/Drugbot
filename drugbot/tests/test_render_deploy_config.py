@@ -10,6 +10,7 @@ def test_render_uses_project_subdir_and_pythonpath():
     assert "rootDir: drugbot" in render_text
     assert "PYTHONPATH" in render_text
     assert "python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT" in render_text
+    assert "ENABLE_BM25_STARTUP_BUILD" in render_text
 
 
 def test_requirements_include_runtime_dependencies():
