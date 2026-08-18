@@ -12,6 +12,9 @@ def test_render_uses_project_subdir_and_pythonpath():
     assert "python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT" in render_text
 
 
-def test_requirements_include_pymupdf():
+def test_requirements_include_runtime_dependencies():
     requirements = (PROJECT_ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert "pymupdf" in requirements.lower()
+    assert "sqlalchemy" in requirements.lower()
+    assert "bcrypt" in requirements.lower()
+    assert "pyjwt" in requirements.lower()
