@@ -837,6 +837,12 @@ $uploadForm.addEventListener("submit", async (e) => {
     });
 
     if (!res.ok) {
+      if (res.status === 102) {
+        throw new Error("Upload is still being processed. Please wait a moment and try again.");
+      }
+      if (res.status === 401) {
+        handleUnauthorized();
+      }
       let errorMsg = `Upload failed (${res.status})`;
       try {
         const errJson = await res.json();
