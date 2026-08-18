@@ -26,8 +26,9 @@ from app.auth.models import (
     AuditLog,
 )
 from app.auth.security import get_current_user, log_audit_event
+from app.core.logging_config import setup_logging
 
-logging.basicConfig(level=logging.INFO)
+setup_logging()
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Drug Information Chatbot")
 
@@ -39,6 +40,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def log_requests_middleware(request: Request, call_next):
+    start_time = datetime.utcnow()
+    response = await call_next(request)
+    duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+
+    # Log non-static HTTP requests cleanly without exposing request bodies or tokens
+    if not request.url.path.startswith("/frontend"):
+        logger.info(
+            "HTTP %s %s -> Status: %d | Duration: %.2fms | Client: %s",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+            request.client.host if request.client else "unknown",
+        )
+    return response
+
+
 # ── Initialize auth database tables ──
 init_db()
 
@@ -49,7 +70,7 @@ app.include_router(auth_router)
 @app.on_event("startup")
 async def startup_event():
     from app.retrieval.keyword_index import ensure_bm25_index
-    logging.info("Building/restoring BM25 index from Chroma database on startup...")
+    logger.info("Building/restoring BM25 index from Chroma database on startup...")
     ensure_bm25_index(force_rebuild=True)
 
 

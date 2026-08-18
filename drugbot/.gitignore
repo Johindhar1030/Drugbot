@@ -32,3 +32,7 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Log files and log directories
+logs/
+*.log

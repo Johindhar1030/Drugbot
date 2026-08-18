@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     max_output_tokens: int = Field(default=1000, validation_alias="MAX_OUTPUT_TOKENS")
     max_history_turns: int = Field(default=4, validation_alias="MAX_HISTORY_TURNS")
 
+    # Logging configuration
+    log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+    log_dir: str = Field(default="logs", validation_alias="LOG_DIR")
+    log_max_bytes: int = Field(default=10485760, validation_alias="LOG_MAX_BYTES")  # 10 MB
+    log_backup_count: int = Field(default=5, validation_alias="LOG_BACKUP_COUNT")
+
     class Config:
         env_file = ".env"
         extra = "ignore"
