@@ -194,13 +194,136 @@ def _detect_comparison_intent(message: str) -> bool:
 
 def _resolve_followup_deterministically(message: str, state: dict) -> ResolutionResult | None:
     m = message.strip().lower()
-    drug = state.get("drug") or "HUMIRA"
+    drug = state.get("drug")
     comparison_entities = state.get("comparison_entities") or []
     if not isinstance(comparison_entities, list):
         comparison_entities = []
     
     if not comparison_entities and state.get("current_indication"):
         comparison_entities = [state["current_indication"]]
+
+    # ── Medicine-Reference Coreference Resolution ──────────────────────────
+    # Patterns that reference the previously discussed medicine without naming it.
+    # Covers English, Tamil, and Hindi medicine/drug reference phrases.
+    _MEDICINE_REF_PATTERN = re.compile(
+        r"\b("
+        # English
+        r"this\s+(?:medicine|medication|drug|treatment)"
+        r"|that\s+(?:medicine|medication|drug|treatment)"
+        r"|the\s+(?:medicine|medication|drug|treatment)"
+        r"|the\s+same\s+(?:medicine|medication|drug|treatment)"
+        r"|this\s+med"
+        r"|that\s+med"
+        # Standalone pronouns — only match when state has a drug
+        r"|(?<!\w)it(?!\w)(?!\s+(?:is|was|has|had|can|could|will|would|should|might|may|does|do)\b)"
+        r")\b",
+        re.IGNORECASE,
+    )
+    # Possessive pronoun referencing a drug (e.g. "its indications", "its dosing")
+    _POSSESSIVE_REF_PATTERN = re.compile(
+        r"\bits\s+(?:dosing|dosage|dose|doses|indications?|contraindications?"
+        r"|warnings?|precautions?|side\s+effects?|adverse\s+reactions?"
+        r"|interactions?|administration|composition|description"
+        r"|mechanism|pharmacology|pharmacokinetics?|efficacy|safety"
+        r"|approval|use|uses|usage|label|prescribing\s+information)\b",
+        re.IGNORECASE,
+    )
+    # Multilingual medicine references (Tamil, Hindi, and common variants)
+    _MULTILINGUAL_MED_REF = re.compile(
+        r"("
+        # Tamil: இந்த மருந்து / அந்த மருந்து / இந்த மருந்தை / மருந்தின் / மருந்துக்கு / இது
+        r"(?:இந்த|அந்த)\s+மருந்[\u0B80-\u0BFF]+"
+        r"|இது"
+        # Hindi: यह दवा / इस दवा / वह दवा / यह दवाई / इसका / इसकी / इसके
+        r"|(?:यह|इस|वह|उस)\s+(?:दवा|दवाई|औषधि)"
+        r"|इसक[ाीे]"
+        r")",
+        re.UNICODE | re.IGNORECASE,
+    )
+
+    has_medicine_ref = bool(_MEDICINE_REF_PATTERN.search(m))
+    has_possessive_ref = bool(_POSSESSIVE_REF_PATTERN.search(m))
+    has_multilingual_ref = bool(_MULTILINGUAL_MED_REF.search(message))  # use original case for Unicode
+
+    if (has_medicine_ref or has_possessive_ref or has_multilingual_ref) and drug:
+        # Check for comparison ambiguity: if the last turn was a comparison of 2+ drugs,
+        # a single pronoun like "its" is genuinely ambiguous.
+        last_q = (state.get("last_question") or "").lower()
+        is_prev_comparison = bool(re.search(
+            r"\b(compare|versus|vs\.?|difference|and)\b", last_q, re.I
+        )) and len(re.findall(
+            r"\b(?:SKYRIZI|RINVOQ|HUMIRA|DUPIXENT|STELARA|REMICADE|ENBREL|CIMZIA|COSENTYX|TALTZ|TREMFYA|XELJANZ|OLUMIANT|OTEZLA|ENTYVIO|KEYTRUDA|OPDIVO|SIMPONI|ACTEMRA|KEVZARA|BIMZELX)\b",
+            state.get("last_question") or "", re.I
+        )) >= 2
+
+        if is_prev_comparison and has_possessive_ref and not has_medicine_ref:
+            # Genuinely ambiguous after a comparison — ask for clarification
+            return ResolutionResult(
+                is_followup=True,
+                is_ambiguous=True,
+                clarification_question="The previous question compared multiple medications. Could you specify which drug you're asking about?",
+                intent="standard",
+                resolved_query=message,
+                entities={"drug": drug},
+                retrieval_queries=[message],
+                required_sections=[],
+            )
+
+        # Perform substitution: replace medicine references with the actual drug name
+        resolved_q = message
+        # English substitutions
+        resolved_q = re.sub(
+            r"\b(?:this|that|the)\s+(?:medicine|medication|drug|treatment|med)\b",
+            drug, resolved_q, flags=re.IGNORECASE,
+        )
+        resolved_q = re.sub(
+            r"\bthe\s+same\s+(?:medicine|medication|drug|treatment)\b",
+            drug, resolved_q, flags=re.IGNORECASE,
+        )
+        # Possessive "its" → drug's (or just replace "its X" with "drug X")
+        resolved_q = re.sub(
+            r"\bits\s+(dosing|dosage|dose|doses|indications?|contraindications?"
+            r"|warnings?|precautions?|side\s+effects?|adverse\s+reactions?"
+            r"|interactions?|administration|composition|description"
+            r"|mechanism|pharmacology|pharmacokinetics?|efficacy|safety"
+            r"|approval|use|uses|usage|label|prescribing\s+information)\b",
+            rf"{drug} \1", resolved_q, flags=re.IGNORECASE,
+        )
+        # Standalone "it" → drug name (careful: only when not followed by is/was/etc
+        # which would form a valid independent clause)
+        resolved_q = re.sub(
+            r"\bit\b(?!\s+(?:is|was|has|had|can|could|will|would|should|might|may|does|do)\b)",
+            drug, resolved_q, flags=re.IGNORECASE,
+        )
+        # Tamil substitutions
+        resolved_q = re.sub(r"(?:இந்த|அந்த)\s+மருந்[\u0B80-\u0BFF]+", drug, resolved_q)
+        resolved_q = re.sub(r"இது", drug, resolved_q)
+        # Hindi substitutions
+        resolved_q = re.sub(r"(?:यह|इस|वह|उस)\s+(?:दवा|दवाई|औषधि)", drug, resolved_q)
+        resolved_q = re.sub(r"इसक[ाीे]", f"{drug} का", resolved_q)
+
+        resolved_q = re.sub(r"\s+", " ", resolved_q).strip()
+
+        logger.info(
+            "Medicine-reference coreference resolved: '%s' → '%s' (drug=%s)",
+            message, resolved_q, drug,
+        )
+
+        return ResolutionResult(
+            is_followup=True,
+            is_ambiguous=False,
+            clarification_question=None,
+            intent="standard",
+            resolved_query=resolved_q,
+            entities={"drug": drug},
+            retrieval_queries=[resolved_q],
+            required_sections=[],
+        )
+
+    # ── Existing Indication / Comparison Resolution ────────────────────────
+    # Default drug for indication-based resolution (fallback only)
+    if not drug:
+        drug = "HUMIRA"
 
     is_anaphora_which = bool(re.search(r"\b(which (one|of these|indication|has|is)|the former|the latter)\b", m, re.I))
     is_compare_phrase = bool(re.search(r"\b(how does that compare|that compare|compare with|versus|vs\.?)\b", m, re.I))
