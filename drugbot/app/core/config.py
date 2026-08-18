@@ -1,5 +1,19 @@
-from pydantic import Field
+import os
+from pathlib import Path
+
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _resolve_storage_path(raw_value: str | None, fallback_name: str) -> str:
+    if raw_value:
+        path = Path(raw_value)
+        if not path.is_absolute():
+            path = (_PROJECT_ROOT / path).resolve()
+        return str(path)
+    return str((_PROJECT_ROOT / fallback_name).resolve())
 
 
 class Settings(BaseSettings):
@@ -40,8 +54,8 @@ class Settings(BaseSettings):
         validation_alias="TESSERACT_LANG",
     )
 
-    sqlite_db_path: str = "./data/app.db"
-    chroma_db_path: str = "./data/chroma_db"
+    sqlite_db_path: str = Field(default="./data/app.db", validation_alias="SQLITE_DB_PATH")
+    chroma_db_path: str = Field(default="./data/chroma_db", validation_alias="CHROMA_DB_PATH")
     # Chroma Cloud configuration (if present the app will prefer cloud)
     chroma_host: str | None = None
     chroma_api_key: str | None = None
@@ -64,6 +78,12 @@ class Settings(BaseSettings):
     log_dir: str = Field(default="logs", validation_alias="LOG_DIR")
     log_max_bytes: int = Field(default=10485760, validation_alias="LOG_MAX_BYTES")  # 10 MB
     log_backup_count: int = Field(default=5, validation_alias="LOG_BACKUP_COUNT")
+
+    @model_validator(mode="after")
+    def _normalize_storage_paths(self):
+        self.sqlite_db_path = _resolve_storage_path(self.sqlite_db_path, "data/app.db")
+        self.chroma_db_path = _resolve_storage_path(self.chroma_db_path, "data/chroma_db")
+        return self
 
     class Config:
         env_file = ".env"

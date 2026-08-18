@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from app.core.config import settings
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PROJECT_ROOT.parent
@@ -19,3 +21,12 @@ def test_requirements_include_runtime_dependencies():
     assert "sqlalchemy" in requirements.lower()
     assert "bcrypt" in requirements.lower()
     assert "pyjwt" in requirements.lower()
+
+
+def test_database_paths_are_project_absolute():
+    sqlite_path = Path(settings.sqlite_db_path)
+    chroma_path = Path(settings.chroma_db_path)
+    assert sqlite_path.is_absolute()
+    assert chroma_path.is_absolute()
+    assert sqlite_path.name == "app.db"
+    assert chroma_path.name == "chroma_db"

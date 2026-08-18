@@ -6,6 +6,7 @@ SQLAlchemy models for authentication.
 
 import os
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy import (
     Column, String, Integer, DateTime, Boolean, Text, ForeignKey, create_engine
@@ -13,7 +14,17 @@ from sqlalchemy import (
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 # ── Database setup ──
-_db_path = os.getenv("SQLITE_DB_PATH", "./data/app.db")
+def _resolve_sqlite_path(raw_value: str | None) -> str:
+    project_root = Path(__file__).resolve().parents[2]
+    if raw_value:
+        candidate = Path(raw_value)
+        if not candidate.is_absolute():
+            candidate = (project_root / candidate).resolve()
+        return str(candidate)
+    return str((project_root / "data" / "app.db").resolve())
+
+
+_db_path = _resolve_sqlite_path(os.getenv("SQLITE_DB_PATH"))
 # Ensure the data directory exists
 os.makedirs(os.path.dirname(os.path.abspath(_db_path)), exist_ok=True)
 
