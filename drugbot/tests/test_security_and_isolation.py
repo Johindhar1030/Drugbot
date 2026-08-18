@@ -267,6 +267,7 @@ class TestAuditLogging:
                     "CHAT_QUERY_FORBIDDEN",
                     "CHAT_SESSION_DELETE_FORBIDDEN",
                     "UNAUTHORIZED_ACCESS_ATTEMPT",
+                    "INACTIVE_OR_DELETED_USER_ACCESS",
                 ]
         finally:
             db.close()

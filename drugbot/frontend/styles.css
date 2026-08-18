@@ -230,6 +230,15 @@ a {
 }
 
 /* ────────── Utility ────────── */
+body.preload *,
+body.preload {
+  -webkit-transition: none !important;
+  -moz-transition: none !important;
+  -ms-transition: none !important;
+  -o-transition: none !important;
+  transition: none !important;
+}
+
 .hidden {
   display: none !important;
 }
@@ -383,6 +392,26 @@ a {
 
 .chat-history-empty svg {
   opacity: 0.4;
+}
+
+.chat-history-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--spacing-6) var(--spacing-4);
+}
+
+.skeleton-line {
+  height: 32px;
+  border-radius: var(--radius-nav);
+  background: var(--color-hover-veil);
+  opacity: 0.5;
+  animation: skeletonPulse 1.4s infinite ease-in-out;
+}
+
+@keyframes skeletonPulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.65; }
 }
 
 /* ── Sidebar Footer ── */

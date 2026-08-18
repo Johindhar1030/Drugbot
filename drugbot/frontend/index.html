@@ -5,10 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Drug Information Chatbot — AI-powered drug information assistant using RAG and verified prescribing data." />
   <title>DrugBot — Drug Information Assistant</title>
+  <script>
+    (function() {
+      // 1. Synchronous auth check to prevent landing page flicker before login redirect
+      try {
+        var token = localStorage.getItem("drugbot_token");
+        if (!token) {
+          window.location.replace("/frontend/login.html");
+          return;
+        }
+      } catch (e) {}
+
+      // 2. Synchronous theme initialization to prevent Flash of Unstyled Theme (FOUT)
+      try {
+        var savedTheme = localStorage.getItem("drugbot_theme") || "system";
+        var effectiveTheme = savedTheme;
+        if (savedTheme === "system") {
+          effectiveTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.setAttribute("data-theme", effectiveTheme);
+      } catch (e) {}
+    })();
+  </script>
   <link rel="stylesheet" href="styles.css" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💊</text></svg>" />
 </head>
-<body>
+<body class="preload">
   <!-- ═══════════════════════════════════════════ SIDEBAR ═══════════════════════════════════════════ -->
   <aside id="sidebar" class="sidebar" aria-label="Chat navigation">
     <!-- Sidebar Header -->

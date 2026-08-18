@@ -46,6 +46,7 @@ if (!getAuthToken()) {
 // ──────── Application State ────────
 const state = {
   sessions: [],            // Array of { id, title, created_at, updated_at } fetched from server
+  isSessionsLoaded: false, // Flag to prevent UI history flicker before initial fetch completes
   activeSessionId: null,
   chatInitializationId: null, // Token tracking active chat initialization to prevent stale async callbacks
   messages: {},            // Cache of { [sessionId]: [{ id, role, text, citations, confidence, scores, safety_notice }] }
@@ -183,11 +184,12 @@ async function fetchChatSessions() {
     const data = await res.json();
     if (data && Array.isArray(data.sessions)) {
       state.sessions = data.sessions;
-      // Re-render sidebar without changing state.activeSessionId
-      renderChatHistory();
     }
   } catch (err) {
     console.warn("Error fetching chat sessions:", err);
+  } finally {
+    state.isSessionsLoaded = true;
+    renderChatHistory();
   }
 }
 
@@ -320,6 +322,15 @@ function showThread() {
 // ──────── Render chat history sidebar ────────
 function renderChatHistory() {
   $chatHistory.innerHTML = "";
+
+  if (!state.isSessionsLoaded) {
+    $chatHistory.innerHTML = `
+      <div class="chat-history-loading">
+        <div class="skeleton-line"></div>
+        <div class="skeleton-line"></div>
+      </div>`;
+    return;
+  }
 
   if (state.sessions.length === 0) {
     $chatHistory.innerHTML = `
@@ -651,7 +662,7 @@ $form.addEventListener("submit", async (e) => {
  * Single reusable function to initialize/reset to a NEW CHAT session.
  * Clears active messages view, deselects previous sidebar history, and shows welcome screen.
  */
-function startNewChat() {
+function startNewChat(shouldFocus = false) {
   stopSpeech();
   if (isListening && recognition) {
     recognition.stop();
@@ -668,13 +679,13 @@ function startNewChat() {
     $input.value = "";
     $input.style.height = "auto";
     if ($sendBtn) $sendBtn.disabled = true;
-    $input.focus();
+    if (shouldFocus) $input.focus();
   }
   return newId;
 }
 
 $btnNewChat.addEventListener("click", () => {
-  startNewChat();
+  startNewChat(true);
 });
 
 
@@ -1238,12 +1249,19 @@ function speakResponse(rawText, btnEl) {
 //  INITIALIZATION
 // ════════════════════════════════════════════════════════════════════════════
 async function init() {
-  // 1. Immediately start a new empty chat synchronously (ensures state.activeSessionId is set right away)
-  startNewChat();
+  // 1. Immediately start a new empty chat synchronously without forcing scroll focus shift
+  startNewChat(false);
 
   // 2. Fetch history and documents in background without blocking or overwriting active chat session
   fetchChatSessions();
   fetchIndexedDrugs();
+
+  // 3. Remove initial CSS preload guard smoothly after first render frame to prevent transition flashing
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      document.body.classList.remove("preload");
+    });
+  });
 }
 
 // ════════════════════════════════════════════════════════════════════════════
