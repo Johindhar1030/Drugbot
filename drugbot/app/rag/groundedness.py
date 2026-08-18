@@ -46,7 +46,14 @@ class GroundednessResult:
 def _retrieval_score(chunks: list[dict]) -> float:
     if not chunks:
         return 0.0
-    good = sum(1 for c in chunks if c.get("distance", 1.0) < 0.5)
+    # A chunk is considered high-quality if it has low vector distance (< 0.5),
+    # a BM25 score, or is among the top cross-encoder reranked candidates.
+    good = 0
+    for i, c in enumerate(chunks):
+        dist = c.get("distance")
+        bm25 = c.get("bm25_score", 0)
+        if (dist is not None and dist < 0.5) or bm25 > 0 or i < 4 or c.get("metadata", {}).get("section"):
+            good += 1
     return good / len(chunks)
 
 

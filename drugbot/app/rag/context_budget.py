@@ -51,11 +51,11 @@ def _is_section_critical(query: str, section: str) -> bool:
 
     checks = [
         (r"contraindicat", ["CONTRAINDICATION", "4 CONTRAINDICATION"]),
-        (r"active ingredient|description|what is|composition", ["DESCRIPTION", "11 DESCRIPTION"]),
+        (r"active ingredient|chemical structure|composition", ["DESCRIPTION", "11 DESCRIPTION"]),
         (r"dosag|dosing|dose|how to take|administration", ["DOSAGE", "RECOMMENDED DOSAGE"]),
         (r"warning|precaution|risk", ["WARNING", "PRECAUTION", "BOXED WARNING"]),
         (r"side effect|adverse", ["ADVERSE REACTION"]),
-        (r"indication|used for|treatment|approved", ["INDICATIONS AND USAGE"]),
+        (r"indication|used for|treatment|approved|what is|what are|condition|treat|indicated", ["INDICATIONS AND USAGE", "INDICATIONS", "1 INDICATIONS", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"]),
         (r"how supplied|storage", ["HOW SUPPLIED"]),
         (r"mechanism|pharmacol", ["MECHANISM", "PHARMACOL", "CLINICAL PHARMACOLOGY"]),
     ]

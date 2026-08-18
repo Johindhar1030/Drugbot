@@ -34,7 +34,18 @@ def hybrid_retrieve(query: str, drug_name: str | list[str] | tuple | None = None
 
     # Intent-aware search term expansion for clinical query resolution
     search_query = query
-    if re.search(r"active ingredient", query, re.I):
+    is_specific_topic = bool(re.search(
+        r"\b(contraindicat|dosag|dosing|warning|precaution|side\s+effect|adverse|interaction|active\s+ingredient|description|chemical|composition)\b",
+        query, re.I
+    ))
+    is_overview_or_indications = bool(re.search(
+        r"\b(what\s+(is|are)|used\s+for|indicated\s+for|indications?|conditions?\s+treated|approved\s+(uses?|indications?)|what\s+does\s+.+\s+treat|tell\s+me\s+about|describe|information\s+about|என்றால்\s+என்ன|क्या\s+है)\b",
+        query, re.I | re.UNICODE
+    )) and not is_specific_topic
+
+    if is_overview_or_indications:
+        search_query += " indications and usage approved indications conditions treated 1.1 1.2 1.3 1.4 1.5"
+    elif re.search(r"active ingredient", query, re.I):
         search_query += " description contains active substance adalimumab"
     elif re.search(r"contraindicat", query, re.I):
         search_query += " contraindications section 4"
@@ -58,12 +69,13 @@ import re
 
 _BOOST_RULES = [
     (re.compile(r"contraindicat", re.I), ["CONTRAINDICATION", "CONTRAINDICATIONS", "4 CONTRAINDICATIONS"], 3.0),
-    (re.compile(r"(active ingredient|description|active substance|chemical|composition)", re.I), ["DESCRIPTION", "11 DESCRIPTION"], 3.0),
+    (re.compile(r"(active ingredient|chemical|composition)", re.I), ["DESCRIPTION", "11 DESCRIPTION"], 3.0),
     (re.compile(r"(dosag|dosing|how to take|administration|schedule|initial dose|maintenance dose|higher dose)", re.I),
      ["DOSAGE", "DOSAGE AND ADMINISTRATION", "RECOMMENDED DOSAGE", "2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2 DOSAGE"], 6.0),
     (re.compile(r"(warning|precaution|risk)", re.I), ["WARNING", "WARNINGS AND PRECAUTIONS", "BOXED WARNING"], 2.0),
     (re.compile(r"(side effect|adverse reaction)", re.I), ["ADVERSE REACTION", "ADVERSE REACTIONS"], 2.0),
-    (re.compile(r"(indication|use|treatment|used for)", re.I), ["INDICATIONS AND USAGE"], 2.0),
+    (re.compile(r"(indication|use|treatment|used for|what is|what are|approved|condition|treat|indicated|என்றால்|क्या)", re.I),
+     ["INDICATIONS AND USAGE", "INDICATIONS", "APPROVED USES", "1 INDICATIONS", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10"], 6.0),
 ]
 
 # Section-confusion penalties: when asking about section X, penalise the
@@ -78,12 +90,15 @@ _PENALTY_RULES = [
     (re.compile(r"\b(warning|precaution)\b", re.I),
      ["4 CONTRAINDICATIONS", "CONTRAINDICATIONS"], -1.5),
     # "active ingredient / description" query → penalise §1 indications chunks
-    (re.compile(r"(active ingredient|description|composition)", re.I),
+    (re.compile(r"(active ingredient|chemical|composition)", re.I),
      ["INDICATIONS AND USAGE", "1 INDICATIONS"], -1.5),
     # "dosage / dosing / initial dose" query → penalise §14 clinical studies and §6 adverse reactions
     (re.compile(r"(dosag|dosing|how to take|administration|schedule|initial dose|maintenance dose|higher dose)", re.I),
      ["CLINICAL STUDIES", "14.1", "14.2", "14.3", "14.4", "14.5", "14.6", "14.7", "14.8", "14.9", "14.10", "14.11", "14.12", "14 CLINICAL",
       "ADVERSE REACTIONS", "6.1", "6.2", "6.3", "6 ADVERSE"], -4.0),
+    # "overview / indications" query → penalise §0 Boxed Warning & §5 Warnings so §1 Indications ranks #1
+    (re.compile(r"(indication|used for|treatment|used|what is|what are|approved|condition|treat|indicated)", re.I),
+     ["BOXED WARNING", "WARNINGS AND PRECAUTIONS", "5 WARNINGS", "6 ADVERSE REACTIONS", "ADVERSE REACTIONS"], -3.0),
 ]
 
 
